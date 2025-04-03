@@ -1,0 +1,100 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Combo {
+  id         String   @id
+  title      String
+  price      Int
+  smallZones Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime
+  Zone       Zone[]   @relation("ComboZones")
+}
+
+model Directions {
+  id        String   @id
+  content   String
+  createdAt DateTime @default(now())
+  name      String
+}
+
+model Zone {
+  id        String   @id
+  code      String   @unique
+  title     String
+  zone      String
+  smallZone Boolean
+  mainZone  Boolean
+  price     Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+  order     Int?
+  Combo     Combo[]  @relation("ComboZones")
+}
+
+model accounts {
+  id                  String  @id
+  user_id             String
+  type                String
+  provider            String
+  provider_account_id String
+  refresh_token       String?
+  access_token        String?
+  expires_at          Int?
+  token_type          String?
+  scope               String?
+  id_token            String?
+  session_state       String?
+  users               users   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([provider, provider_account_id])
+}
+
+model users {
+  id             String     @id
+  phone          String?
+  name           String?
+  email          String?    @unique
+  email_verified DateTime?
+  image          String?
+  password       String?
+  role           UserRole   @default(USER)
+  accounts       accounts[]
+}
+
+enum UserRole {
+  ADMIN
+  USER
+}
+
+model Customers {
+  id        String   @id @default(uuid())
+  name      String?
+  phone     String
+  email     String?
+  createdAt DateTime @default(now())
+}
+
+model Chat {
+  id        String    @id @default(uuid())
+  number    String
+  status    String? // Ej: "awaiting_reservation_confirmation", "closed", etc.
+  createdAt DateTime  @default(now())
+  messages  Message[]
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  number    String
+  content   String
+  role      String
+  createdAt DateTime @default(now())
+  chat      Chat     @relation(fields: [chatId], references: [id])
+  chatId    String
+}
