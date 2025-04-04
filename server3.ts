@@ -16,6 +16,8 @@ app.use(express.json());
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+const tempNames: Record<string, string> = {};
+
 async function interpretUserIntent(
   messages: ChatCompletionMessageParam[],
   context: string,
@@ -141,21 +143,67 @@ app.post("/chat", async (req: Request, res: Response): Promise<void> => {
 
       if (!customer) {
         const lastMsg = messages[messages.length - 1]?.content || "";
-        const emailMatch = lastMsg.match(/[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}/);
-        const nameMatch = lastMsg.match(
-          /[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)+/
-        );
 
-        const trimmedEmail = emailMatch?.[0]?.trim();
-        const trimmedName = nameMatch?.[0]?.trim();
+        if (!chat.status || chat.status === "reservar_turno") {
+          await db.chat.update({
+            where: { id: chat.id },
+            data: { status: "awaiting_name" },
+          });
+          const responseText =
+            "¡Perfecto! Para avanzar con la reserva necesito que me digas tu nombre completo.";
+          await db.message.create({
+            data: {
+              number,
+              content: responseText,
+              role: "assistant",
+              chatId: chat.id,
+            },
+          });
+          res.json({ intent, message: responseText, customerExists: false });
+          return;
+        }
 
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        const isValidEmail = trimmedEmail && emailRegex.test(trimmedEmail);
-        const isValidName = trimmedName && trimmedName.length > 0;
+        if (chat.status === "awaiting_name") {
+          tempNames[number] = lastMsg;
+          await db.chat.update({
+            where: { id: chat.id },
+            data: { status: "awaiting_email" },
+          });
+          const responseText = `Gracias ${lastMsg}. Ahora decime tu correo electrónico.`;
+          await db.message.create({
+            data: {
+              number,
+              content: responseText,
+              role: "assistant",
+              chatId: chat.id,
+            },
+          });
+          res.json({ intent, message: responseText, customerExists: false });
+          return;
+        }
 
-        if (isValidName && isValidEmail) {
+        if (chat.status === "awaiting_email") {
+          const tempName = tempNames[number];
+          const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+          const isValidEmail = emailRegex.test(lastMsg);
+
+          if (!isValidEmail || !tempName) {
+            const responseText =
+              "El correo electrónico que ingresaste no parece válido. ¿Podés revisarlo y enviarlo nuevamente?";
+            await db.message.create({
+              data: {
+                number,
+                content: responseText,
+                role: "assistant",
+                chatId: chat.id,
+              },
+            });
+            res.json({ intent, message: responseText, customerExists: false });
+            return;
+          }
+
           const existingEmail = await db.customers.findFirst({
-            where: { email: trimmedEmail },
+            where: { email: lastMsg },
           });
           if (existingEmail) {
             const responseText =
@@ -171,10 +219,18 @@ app.post("/chat", async (req: Request, res: Response): Promise<void> => {
             res.json({ intent, message: responseText, customerExists: false });
             return;
           }
+
           customer = await db.customers.create({
-            data: { name: trimmedName, email: trimmedEmail, phone: number },
+            data: { name: tempName, email: lastMsg, phone: number },
           });
-          const confirmation = `¡Gracias ${trimmedName}! Te registré con el correo ${trimmedEmail}. ¿Querés que avancemos con la reserva del turno?`;
+
+          delete tempNames[number];
+
+          const confirmation = `¡Gracias ${tempName}! Te registré con el correo ${lastMsg}. ¿Querés que avancemos con la reserva del turno?`;
+          await db.chat.update({
+            where: { id: chat.id },
+            data: { status: "awaiting_turno_confirmation" },
+          });
           await db.message.create({
             data: {
               number,
@@ -185,19 +241,6 @@ app.post("/chat", async (req: Request, res: Response): Promise<void> => {
           });
           res.json({ intent, message: confirmation, customerExists: true });
           return;
-        } else {
-          const responseText =
-            "¡Perfecto! Antes de continuar, necesito tu nombre y un correo electrónico válido para registrarte.";
-          await db.message.create({
-            data: {
-              number,
-              content: responseText,
-              role: "assistant",
-              chatId: chat.id,
-            },
-          });
-          res.json({ intent, message: responseText, customerExists: false });
-          return;
         }
       } else {
         extraInfo = {
@@ -205,7 +248,16 @@ app.post("/chat", async (req: Request, res: Response): Promise<void> => {
           customer,
           message,
         };
+        await db.chat.update({
+          where: { id: chat.id },
+          data: { status: intent },
+        });
       }
+    } else {
+      await db.chat.update({
+        where: { id: chat.id },
+        data: { status: intent },
+      });
     }
 
     await db.message.create({
